@@ -9,7 +9,7 @@ use std::{
 };
 
 use libsodium_sys::{
-    randombytes_buf, sodium_allocarray, sodium_free, sodium_init, sodium_mprotect_noaccess,
+    sodium_allocarray, sodium_free, sodium_init, sodium_mprotect_noaccess,
     sodium_mprotect_readonly, sodium_mprotect_readwrite,
 };
 
@@ -302,7 +302,7 @@ pub(crate) unsafe fn free<T>(ptr: *mut T) {
 #[cfg(test)]
 mod test {
     use super::*;
-    use std::process;
+    use libsodium_sys::randombytes_buf;
 
     #[test]
     fn test_init_with_garbage() {
@@ -478,5 +478,28 @@ mod test {
         boxed.prot.set(Prot::NoAccess);
 
         boxed.retain(Prot::ReadOnly);
+    }
+
+    #[test]
+    #[should_panic(expected = "Attempted to dereference a zero-length pointer")]
+    fn test_zero_length() {
+        let boxed = Boxed::<u8>::zero(0);
+
+        let _ = boxed.as_ref();
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot unlock mutably more than once")]
+    fn test_multiple_writers() {
+        let mut boxed = Boxed::<u64>::zero(1);
+
+        let _ = boxed.unlock_mut();
+        let _ = boxed.unlock_mut();
+    }
+
+    #[test]
+    #[should_panic(expected = "Releases exceeded retains")]
+    fn test_release_vs_retain() {
+        Boxed::<u64>::zero(2).lock();
     }
 }
