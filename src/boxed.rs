@@ -22,14 +22,14 @@ enum Prot {
 
 type RefCount = u8;
 
-pub(crate) struct Box<T: Bytes> {
+pub(crate) struct Boxed<T: Bytes> {
     ptr: NonNull<T>,
     len: usize,
     prot: Cell<Prot>,
     refs: Cell<RefCount>,
 }
 
-impl<T: Bytes> Box<T> {
+impl<T: Bytes> Boxed<T> {
     pub(crate) fn new<F>(len: usize, init: F) -> Self
     where
         F: FnOnce(&mut Self),
@@ -102,7 +102,7 @@ impl<T: Bytes> Box<T> {
 
         assert!(
             self.prot.get() != Prot::NoAccess,
-            "May not call box while locked"
+            "May not call Boxed while locked"
         );
 
         unsafe { self.ptr.as_ref() }
@@ -116,7 +116,7 @@ impl<T: Bytes> Box<T> {
 
         assert!(
             self.prot.get() == Prot::ReadWrite,
-            "May not call box unless mutably unlocked"
+            "May not call Boxed unless mutably unlocked"
         );
 
         unsafe { self.ptr.as_mut() }
@@ -125,7 +125,7 @@ impl<T: Bytes> Box<T> {
     pub(crate) fn as_slice(&self) -> &[T] {
         assert!(
             self.prot.get() != Prot::NoAccess,
-            "May not call box while locked"
+            "May not call Boxed while locked"
         );
 
         unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
@@ -134,7 +134,7 @@ impl<T: Bytes> Box<T> {
     pub(crate) fn as_mut_slice(&mut self) -> &mut [T] {
         assert!(
             self.prot.get() == Prot::ReadWrite,
-            "secrets: may not call Box::as_mut_slice unless mutably unlocked"
+            "May not call Boxed unless mutably unlocked"
         );
 
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
@@ -181,8 +181,8 @@ impl<T: Bytes> Box<T> {
 
         match refs.checked_add(1) {
             Some(v) => self.refs.set(v),
-            None if self.is_locked() => panic!("secrets: out-of-order retain/release detected"),
-            None => panic!("secrets: retained too many times"),
+            None if self.is_locked() => panic!("Out-of-order retain/release detected"),
+            None => panic!("Retained too many times"),
         };
     }
 
@@ -209,26 +209,26 @@ impl<T: Bytes> Box<T> {
     }
 }
 
-impl<T: Bytes + Randomized> Box<T> {
+impl<T: Bytes + Randomized> Boxed<T> {
     pub(crate) fn random(len: usize) -> Self {
         Self::new(len, |b| b.as_mut_slice().randomize())
     }
 }
 
-impl<T: Bytes + ZeroOut> Box<T> {
+impl<T: Bytes + ZeroOut> Boxed<T> {
     pub(crate) fn zero(len: usize) -> Self {
         Self::new(len, |b| b.as_mut_slice().zero())
     }
 }
 
-impl<T: Bytes> Drop for Box<T> {
+impl<T: Bytes> Drop for Boxed<T> {
     fn drop(&mut self) {
         if !thread::panicking() {
-            assert!(self.refs.get() == 0, "secrets: retains exceeded releases");
+            assert!(self.refs.get() == 0, "Retains exceeded releases");
 
             assert!(
                 self.prot.get() == Prot::NoAccess,
-                "secrets: dropped secret was still accessible"
+                "Dropped secret was still accessible"
             );
         }
 
@@ -236,13 +236,13 @@ impl<T: Bytes> Drop for Box<T> {
     }
 }
 
-impl<T: Bytes> Debug for Box<T> {
+impl<T: Bytes> Debug for Boxed<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(fmt, "{{ {} bytes redacted }}", self.size())
     }
 }
 
-impl<T: Bytes> Clone for Box<T> {
+impl<T: Bytes> Clone for Boxed<T> {
     fn clone(&self) -> Self {
         Self::new(self.len, |b| {
             b.as_mut_slice().copy_from_slice(self.unlock().as_slice());
@@ -251,7 +251,7 @@ impl<T: Bytes> Clone for Box<T> {
     }
 }
 
-impl<T: Bytes + ConstEq> PartialEq for Box<T> {
+impl<T: Bytes + ConstEq> PartialEq for Boxed<T> {
     fn eq(&self, other: &Self) -> bool {
         if self.len != other.len {
             return false;
@@ -269,13 +269,13 @@ impl<T: Bytes + ConstEq> PartialEq for Box<T> {
     }
 }
 
-impl<T: Bytes + ZeroOut> From<&mut T> for Box<T> {
+impl<T: Bytes + ZeroOut> From<&mut T> for Boxed<T> {
     fn from(data: &mut T) -> Self {
         Self::new(1, |b| unsafe { data.copy_and_zero(b.as_mut()) })
     }
 }
 
-impl<T: Bytes + ZeroOut> From<&mut [T]> for Box<T> {
+impl<T: Bytes + ZeroOut> From<&mut [T]> for Boxed<T> {
     fn from(data: &mut [T]) -> Self {
         Self::new(data.len(), |b| unsafe {
             data.copy_and_zero(b.as_mut_slice())
@@ -283,7 +283,7 @@ impl<T: Bytes + ZeroOut> From<&mut [T]> for Box<T> {
     }
 }
 
-unsafe impl<T: Bytes + Send> Send for Box<T> {}
+unsafe impl<T: Bytes + Send> Send for Boxed<T> {}
 
 fn mprotect<T>(ptr: *mut T, prot: Prot) {
     if !match prot {
@@ -306,7 +306,7 @@ mod test {
 
     #[test]
     fn test_init_with_garbage() {
-        let boxed = Box::<u8>::new(4, |_| {});
+        let boxed = Boxed::<u8>::new(4, |_| {});
         let unboxed = boxed.unlock().as_slice();
 
         let garbage = unsafe {
@@ -326,7 +326,7 @@ mod test {
 
     #[test]
     fn test_custom_init() {
-        let boxed = Box::<u8>::new(1, |secret| {
+        let boxed = Boxed::<u8>::new(1, |secret| {
             secret.as_mut_slice().clone_from_slice(b"\x04");
         });
 
