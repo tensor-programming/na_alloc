@@ -9,7 +9,7 @@ use std::{
 };
 
 use libsodium_sys::{
-    sodium_allocarray, sodium_free, sodium_init, sodium_mprotect_noaccess,
+    randombytes_buf, sodium_allocarray, sodium_free, sodium_init, sodium_mprotect_noaccess,
     sodium_mprotect_readonly, sodium_mprotect_readwrite,
 };
 
@@ -332,5 +332,151 @@ mod test {
 
         assert_eq!(boxed.unlock().as_slice(), [0x04]);
         boxed.lock();
+    }
+
+    #[test]
+    fn test_init_with_zero() {
+        let boxed = Boxed::<u8>::zero(6);
+
+        assert_eq!(boxed.unlock().as_slice(), [0, 0, 0, 0, 0, 0]);
+
+        boxed.lock();
+    }
+
+    #[test]
+    fn test_init_with_values() {
+        let mut value = [8u64];
+        let boxed = Boxed::from(&mut value[..]);
+
+        assert_eq!(value, [0]);
+        assert_eq!(boxed.unlock().as_slice(), [8]);
+
+        boxed.lock();
+    }
+
+    #[test]
+    fn test_eq() {
+        let boxed_a = Boxed::<u8>::random(1);
+        let boxed_b = boxed_a.clone();
+
+        assert_eq!(boxed_a, boxed_b);
+        assert_eq!(boxed_b, boxed_a);
+
+        let boxed_a = Boxed::<u8>::random(16);
+        let boxed_b = Boxed::<u8>::random(16);
+
+        assert_ne!(boxed_a, boxed_b);
+        assert_ne!(boxed_b, boxed_a);
+
+        let boxed_b = Boxed::<u8>::random(12);
+
+        assert_ne!(boxed_a, boxed_b);
+        assert_ne!(boxed_b, boxed_a);
+    }
+
+    #[test]
+    fn test_refs() {
+        let mut boxed = Boxed::<u8>::zero(8);
+
+        assert_eq!(0, boxed.refs.get());
+
+        let _ = boxed.unlock();
+        let _ = boxed.unlock();
+
+        assert_eq!(2, boxed.refs.get());
+
+        boxed.lock();
+        boxed.lock();
+
+        assert_eq!(0, boxed.refs.get());
+
+        let _ = boxed.unlock_mut();
+
+        assert_eq!(1, boxed.refs.get());
+
+        boxed.lock();
+
+        assert_eq!(0, boxed.refs.get());
+    }
+
+    #[test]
+    fn test_ref_overflow() {
+        let boxed = Boxed::<u8>::zero(8);
+
+        for _ in 0..u8::max_value() {
+            let _ = boxed.unlock();
+        }
+
+        for _ in 0..u8::max_value() {
+            boxed.lock()
+        }
+    }
+
+    #[test]
+    fn test_random_borrow_amounts() {
+        let boxed = Boxed::<u8>::zero(1);
+        let mut counter = 0u8;
+
+        unsafe {
+            randombytes_buf(
+                counter.as_mut_bytes().as_mut_ptr() as *mut _,
+                counter.as_mut_bytes().len(),
+            );
+        }
+
+        for _ in 0..counter {
+            let _ = boxed.unlock();
+        }
+
+        for _ in 0..counter {
+            boxed.lock()
+        }
+    }
+
+    #[test]
+    fn test_threading() {
+        use std::{sync::mpsc, thread};
+
+        let (tx, rx) = mpsc::channel();
+
+        let ch = thread::spawn(move || {
+            let boxed = Boxed::<u64>::random(1);
+            let val = boxed.unlock().as_slice().to_vec();
+
+            tx.send((boxed, val)).expect("failed to send via channel");
+        });
+
+        let (boxed, val) = rx.recv().expect("failed to read from channel");
+
+        assert_eq!(Prot::ReadOnly, boxed.prot.get());
+        assert_eq!(val, boxed.as_slice());
+
+        ch.join().expect("child thread terminated.");
+        boxed.lock();
+    }
+
+    #[test]
+    #[should_panic(expected = "Retained too many times")]
+    fn test_overflow_refs() {
+        let boxed = Boxed::<[u8; 4]>::zero(4);
+
+        for _ in 0..=u8::max_value() {
+            let _ = boxed.unlock();
+        }
+
+        for _ in 0..boxed.refs.get() {
+            boxed.lock()
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Out-of-order retain/release detected")]
+    fn test_out_of_order() {
+        let boxed = Boxed::<u8>::zero(3);
+
+        boxed.refs.set(boxed.refs.get().wrapping_sub(1));
+        boxed.prot.set(Prot::NoAccess);
+
+        boxed.retain(Prot::ReadOnly);
     }
 }
