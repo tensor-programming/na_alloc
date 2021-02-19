@@ -76,7 +76,6 @@ impl<T: Bytes> PartialEq<RefMut<'_, T>> for Ref<'_, T> {
 impl<T: Bytes> Eq for Ref<'_, T> {}
 
 impl<'a, T: Bytes> RefMut<'a, T> {
-    /// Instantiates a new `RefMut`.
     fn new(boxed: &'a mut Boxed<T>) -> Self {
         assert!(
             boxed.len() == 1,
@@ -190,3 +189,113 @@ impl<T: Bytes> PartialEq<Ref<'_, T>> for RefMut<'_, T> {
 }
 
 impl<T: Bytes> Eq for RefMut<'_, T> {}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_init() {
+        let _ = Guarded::<u64>::new(|v| {
+            *v = 0x8f1a;
+
+            assert_eq!(*v, 0x8f1a);
+        });
+
+        assert!(Guarded::<u8>::try_new(|_| Ok::<(), ()>(())).is_ok());
+    }
+
+    #[test]
+    fn test_borrows() {
+        let guarded = Guarded::<u64>::zero();
+        let borrow = guarded.borrow();
+
+        assert_eq!(*borrow, 0);
+
+        let mut guarded = Guarded::<u64>::zero();
+        let mut borrow = guarded.borrow_mut();
+
+        *borrow = 0x01ab_cdef;
+
+        assert_eq!(*borrow, 0x01ab_cdef);
+    }
+
+    #[test]
+    fn test_arrays() {
+        let guarded = Guarded::<[u8; 10]>::new(|v| *v = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+        assert_eq!(*guarded.borrow(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        assert_eq!(guarded.size(), 10);
+
+        let guarded = Guarded::<[u128; 4]>::zero();
+
+        assert_eq!(guarded.size(), 64);
+    }
+
+    #[test]
+    fn test_guard() {
+        let mut guard = Guarded::<u64>::random();
+
+        assert_eq!(format!("{{ size: {}, hidden }}", 8), format!("{:?}", guard),);
+
+        assert_eq!(
+            format!("{{ size: {}, hidden }}", 8),
+            format!("{:?}", guard.borrow()),
+        );
+
+        assert_eq!(
+            format!("{{ size: {}, hidden }}", 8),
+            format!("{:?}", guard.borrow_mut()),
+        );
+    }
+
+    #[test]
+    fn test_moving_and_cloning() {
+        let guard = Guarded::<u8>::zero();
+
+        let moved = guard;
+
+        assert_eq!(*moved.borrow(), 0);
+
+        let guard = Guarded::<u8>::random();
+
+        let borrow = guard.borrow();
+        let clone = borrow.clone();
+
+        assert_eq!(borrow, clone);
+    }
+
+    #[test]
+    fn test_comparisons() {
+        let guard = Guarded::<u8>::random();
+
+        let clone = guard.clone();
+
+        assert_eq!(guard, clone);
+
+        let guard_a = Guarded::<[u128; 8]>::random();
+        let guard_b = Guarded::<[u128; 8]>::random();
+
+        assert_ne!(guard_a, guard_b);
+
+        let mut guard = Guarded::<u8>::from(&mut 0xaf);
+        let mut clone = guard.clone();
+
+        assert_eq!(guard.borrow_mut(), clone.borrow_mut());
+        assert_eq!(guard.borrow_mut(), clone.borrow());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_borrowing_zero_length() {
+        let boxed = Boxed::<u8>::zero(0);
+        let _ = boxed.as_ref();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_borrowing_zero_length_mut() {
+        let mut boxed = Boxed::<u8>::zero(0);
+        let _ = boxed.as_mut();
+    }
+}

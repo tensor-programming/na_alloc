@@ -239,7 +239,7 @@ impl<T: Bytes> Drop for Boxed<T> {
 
 impl<T: Bytes> Debug for Boxed<T> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(fmt, "{{ {} bytes redacted }}", self.size())
+        write!(fmt, "{{ size: {}, hidden }}", self.size())
     }
 }
 
