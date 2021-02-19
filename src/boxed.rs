@@ -22,6 +22,7 @@ enum Prot {
 
 type RefCount = u8;
 
+#[derive(Eq)]
 pub(crate) struct Boxed<T: Bytes> {
     ptr: NonNull<T>,
     len: usize,
